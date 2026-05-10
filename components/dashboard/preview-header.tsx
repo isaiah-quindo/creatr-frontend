@@ -75,7 +75,7 @@ export function PreviewHeader({
 
   return (
     <div className="flex flex-col gap-2 rounded-2xl border border-secondary bg-primary p-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-secondary px-3 py-2">
           <span
             className={
@@ -87,28 +87,30 @@ export function PreviewHeader({
             {displayUrl}
           </span>
         </div>
-        <Button
-          type="button"
-          color="secondary"
-          size="sm"
-          iconLeading={copied ? Check : Copy01}
-          isDisabled={!hasHandle}
-          onClick={onCopy}
-        >
-          {copied ? "Copied" : "Copy"}
-        </Button>
-        <Button
-          type="button"
-          color="tertiary"
-          size="sm"
-          iconLeading={LinkExternal01}
-          isDisabled={!hasHandle || !creator.is_public}
-          href={hasHandle ? publicUrl : undefined}
-          target="_blank"
-          rel="noreferrer"
-        >
-          Open
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button
+            type="button"
+            color="secondary"
+            size="sm"
+            iconLeading={copied ? Check : Copy01}
+            isDisabled={!hasHandle}
+            onClick={onCopy}
+          >
+            {copied ? "Copied" : "Copy"}
+          </Button>
+          <Button
+            type="button"
+            color="tertiary"
+            size="sm"
+            iconLeading={LinkExternal01}
+            isDisabled={!hasHandle || !creator.is_public}
+            href={hasHandle ? publicUrl : undefined}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-center justify-between gap-3 pt-1">
