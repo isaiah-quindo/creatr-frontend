@@ -16,6 +16,11 @@ import { themeStyle, type ThemeName } from "@/lib/themes";
 
 const SHOWCASE_USERNAME = "michael_24";
 
+// Render on every request so the showcase profile reflects michael_24's
+// latest edits — otherwise Vercel prerenders the page at deploy time and
+// freezes the showcase to whatever the API returned during `next build`.
+export const dynamic = "force-dynamic";
+
 export default async function Home() {
   const showcase = await getPublicCreator(SHOWCASE_USERNAME).catch(() => null);
   return (
