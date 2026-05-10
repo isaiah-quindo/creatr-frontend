@@ -10,13 +10,19 @@
 /**
  * Browser calls go through the Next.js rewrite at `/api/*` → Django, so the
  * fetch is same-origin and cookies are first-party (works on mobile Safari,
- * works over LAN, no CORS). Server-side fetches (RSC) talk to Django directly
- * since they run on the same host as the dev server.
+ * works over LAN, no CORS). Server-side fetches (RSC) bypass the rewrite —
+ * they need an absolute URL pointing at Django directly.
+ *
+ *   Browser  → "" → /api/foo (same-origin) → Next rewrite → BACKEND_URL/api/foo/
+ *   Server   → BACKEND_URL → BACKEND_URL/api/foo/
+ *
+ * BACKEND_URL is a *server-only* env var (no NEXT_PUBLIC_ prefix) so it never
+ * leaks to the browser; that's what keeps the browser pinned to same-origin.
  */
-const defaultApiBase = () =>
-  typeof window === "undefined" ? "http://127.0.0.1:8000" : "";
-
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? defaultApiBase();
+export const API_BASE =
+  typeof window === "undefined"
+    ? (process.env.BACKEND_URL ?? "http://127.0.0.1:8000")
+    : "";
 
 export class ApiError extends Error {
   constructor(public status: number, public data: unknown, message: string) {
