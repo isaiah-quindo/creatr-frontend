@@ -16,10 +16,12 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [credentialsError, setCredentialsError] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
+    setCredentialsError(null);
     try {
       await fetchCsrf();
       await auth.login({ email, password });
@@ -40,15 +42,13 @@ export default function LoginPage() {
         router.push(`/verify-email/sent?email=${encodeURIComponent(email)}&unverified=1`);
         return;
       }
-      const message =
-        err instanceof ApiError && err.status === 400
-          ? "Invalid email or password."
-          : err instanceof Error
-            ? err.message
-            : "Something went wrong.";
+      if (err instanceof ApiError && err.status === 400) {
+        setCredentialsError("Invalid email or password.");
+        return;
+      }
       toast({
         title: "Couldn't sign in",
-        description: message,
+        description: err instanceof Error ? err.message : "Something went wrong.",
         variant: "error",
       });
     } finally {
@@ -103,7 +103,11 @@ export default function LoginPage() {
               label="Email"
               type="email"
               value={email}
-              onChange={setEmail}
+              onChange={(v) => {
+                setEmail(v);
+                if (credentialsError) setCredentialsError(null);
+              }}
+              isInvalid={!!credentialsError}
               isRequired
               autoFocus
             />
@@ -111,7 +115,12 @@ export default function LoginPage() {
               label="Password"
               type="password"
               value={password}
-              onChange={setPassword}
+              onChange={(v) => {
+                setPassword(v);
+                if (credentialsError) setCredentialsError(null);
+              }}
+              isInvalid={!!credentialsError}
+              hint={credentialsError ?? undefined}
               isRequired
             />
             <Button type="submit" size="lg" isLoading={loading}>

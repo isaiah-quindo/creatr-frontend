@@ -50,6 +50,13 @@ export function PreviewHeader({
       await fetchCsrf();
       const updated = await profileApi.update({ is_public: next });
       onCreatorChange(updated);
+      if (next) {
+        toast({
+          title: "You're live",
+          description: "Anyone with your link can now view your profile.",
+          variant: "success",
+        });
+      }
     } catch (err) {
       onCreatorChange({ ...creator, is_public: previous });
       toast({

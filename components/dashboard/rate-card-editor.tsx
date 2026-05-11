@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Plus, Trash01 } from "@untitledui/icons";
 import { Button } from "@/components/base/buttons/button";
+import { ConfirmModal } from "@/components/base/confirm-modal/confirm-modal";
 import { Input } from "@/components/base/input/input";
 import { useToast } from "@/components/base/toast/toast";
 import {
@@ -36,7 +37,11 @@ export function RateCardEditor({
   const [items, setItems] = useState<Deliverable[]>(() => readDeliverables(creator.rate_card));
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<"idle" | "saved">("idle");
+  const [pendingRemoveIndex, setPendingRemoveIndex] = useState<number | null>(null);
   const { toast } = useToast();
+
+  const pendingItem =
+    pendingRemoveIndex !== null ? items[pendingRemoveIndex] ?? null : null;
 
   function update(index: number, patch: Partial<Deliverable>) {
     setItems((prev) =>
@@ -50,9 +55,12 @@ export function RateCardEditor({
     setStatus("idle");
   }
 
-  function removeRow(index: number) {
+  function confirmRemoveRow() {
+    if (pendingRemoveIndex === null) return;
+    const index = pendingRemoveIndex;
     setItems((prev) => prev.filter((_, i) => i !== index));
     setStatus("idle");
+    setPendingRemoveIndex(null);
   }
 
   async function save() {
@@ -118,7 +126,8 @@ export function RateCardEditor({
                 color="tertiary"
                 size="sm"
                 iconLeading={Trash01}
-                onClick={() => removeRow(i)}
+                onClick={() => setPendingRemoveIndex(i)}
+                aria-label="Remove row"
               >
                 {""}
               </Button>
@@ -141,6 +150,22 @@ export function RateCardEditor({
           Save rates
         </Button>
       </div>
+
+      <ConfirmModal
+        isOpen={pendingRemoveIndex !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveIndex(null);
+        }}
+        title="Remove this rate?"
+        description={
+          pendingItem && pendingItem.type
+            ? `"${pendingItem.type}" will be removed when you save rates.`
+            : "This row will be removed when you save rates."
+        }
+        confirmLabel="Remove"
+        variant="danger"
+        onConfirm={confirmRemoveRow}
+      />
     </div>
   );
 }

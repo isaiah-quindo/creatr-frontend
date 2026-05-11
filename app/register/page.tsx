@@ -10,27 +10,27 @@ import { Input } from "@/components/base/input/input";
 import { useToast } from "@/components/base/toast/toast";
 import { ApiError, auth, fetchCsrf } from "@/lib/api";
 
-type FieldInvalid = Partial<Record<"email" | "password", boolean>>;
+type FieldErrors = Partial<Record<"email" | "password", string>>;
+
+const PASSWORD_HINT = "At least 8 characters.";
 
 export default function RegisterPage() {
   const router = useRouter();
   const { toast } = useToast();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [invalid, setInvalid] = useState<FieldInvalid>({});
+  const [errors, setErrors] = useState<FieldErrors>({});
   const [loading, setLoading] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setInvalid({});
+    setErrors({});
     setLoading(true);
     try {
       await fetchCsrf();
       await auth.register({ email, password });
       router.push(`/verify-email/sent?email=${encodeURIComponent(email)}`);
     } catch (err) {
-      const messages: string[] = [];
-      const nextInvalid: FieldInvalid = {};
       if (
         err instanceof ApiError &&
         err.status === 400 &&
@@ -38,22 +38,34 @@ export default function RegisterPage() {
         err.data
       ) {
         const data = err.data as Record<string, string[] | string>;
+        const nextErrors: FieldErrors = {};
+        const stray: string[] = [];
         for (const [k, v] of Object.entries(data)) {
           const msg = Array.isArray(v) ? v.join(" ") : String(v);
-          if (k === "email" || k === "password") nextInvalid[k] = true;
-          if (msg) messages.push(msg);
+          if (!msg) continue;
+          if (k === "email" || k === "password") {
+            nextErrors[k] = msg;
+          } else {
+            stray.push(msg);
+          }
+        }
+        setErrors(nextErrors);
+        // Only toast for non-field errors (e.g. {"non_field_errors": [...]}). Field-level
+        // errors render inline under their inputs.
+        if (stray.length > 0 && Object.keys(nextErrors).length === 0) {
+          toast({
+            title: "Couldn't create account",
+            description: stray.join(" "),
+            variant: "error",
+          });
         }
       } else {
-        messages.push(
-          err instanceof Error ? err.message : "Something went wrong.",
-        );
+        toast({
+          title: "Couldn't create account",
+          description: err instanceof Error ? err.message : "Something went wrong.",
+          variant: "error",
+        });
       }
-      setInvalid(nextInvalid);
-      toast({
-        title: "Couldn't create account",
-        description: messages.join(" ") || "Something went wrong.",
-        variant: "error",
-      });
     } finally {
       setLoading(false);
     }
@@ -106,18 +118,25 @@ export default function RegisterPage() {
               label="Email"
               type="email"
               value={email}
-              onChange={setEmail}
-              isInvalid={!!invalid.email}
+              onChange={(v) => {
+                setEmail(v);
+                if (errors.email) setErrors((e) => ({ ...e, email: undefined }));
+              }}
+              isInvalid={!!errors.email}
+              hint={errors.email}
               isRequired
               autoFocus
             />
             <Input
               label="Password"
               type="password"
-              hint="At least 8 characters."
+              hint={errors.password ?? PASSWORD_HINT}
               value={password}
-              onChange={setPassword}
-              isInvalid={!!invalid.password}
+              onChange={(v) => {
+                setPassword(v);
+                if (errors.password) setErrors((e) => ({ ...e, password: undefined }));
+              }}
+              isInvalid={!!errors.password}
               isRequired
             />
             <Button type="submit" size="lg" isLoading={loading}>

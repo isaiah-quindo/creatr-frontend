@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Plus, Trash01 } from "@untitledui/icons";
 import { Button } from "@/components/base/buttons/button";
+import { ConfirmModal } from "@/components/base/confirm-modal/confirm-modal";
 import { Input } from "@/components/base/input/input";
 import { Label } from "@/components/base/input/label";
 import { useToast } from "@/components/base/toast/toast";
@@ -11,10 +12,21 @@ import {
   ApiError,
   embed as embedApi,
   fetchCsrf,
+  parseFieldErrors,
   portfolio as portfolioApi,
   type EmbedPreview,
   type PortfolioItem,
 } from "@/lib/api";
+
+const PORTFOLIO_FIELDS = [
+  "title",
+  "description",
+  "media_type",
+  "original_url",
+  "media_url",
+  "sort_order",
+] as const;
+type PortfolioFieldErrors = Partial<Record<(typeof PORTFOLIO_FIELDS)[number], string>>;
 
 export function PortfolioEditor({
   onItemsChange,
@@ -25,7 +37,14 @@ export function PortfolioEditor({
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pendingRemoveId, setPendingRemoveId] = useState<number | null>(null);
+  const [removing, setRemoving] = useState(false);
   const { toast } = useToast();
+
+  const pendingItem =
+    pendingRemoveId !== null
+      ? (items ?? []).find((s) => s.id === pendingRemoveId) ?? null
+      : null;
 
   useEffect(() => {
     portfolioApi
@@ -38,17 +57,19 @@ export function PortfolioEditor({
     if (items !== null) onItemsChange?.(items);
   }, [items, onItemsChange]);
 
-  async function remove(id: number) {
-    if (!confirm("Remove this portfolio item?")) return;
-    setBusy(true);
+  async function confirmRemove() {
+    if (pendingRemoveId === null) return;
+    const id = pendingRemoveId;
+    setRemoving(true);
     try {
       await fetchCsrf();
       await portfolioApi.remove(id);
       setItems((prev) => (prev ?? []).filter((s) => s.id !== id));
+      setPendingRemoveId(null);
     } catch (err) {
       toast({ title: "Couldn't remove video", description: extractError(err), variant: "error" });
     } finally {
-      setBusy(false);
+      setRemoving(false);
     }
   }
 
@@ -159,7 +180,7 @@ export function PortfolioEditor({
                     size="sm"
                     iconLeading={Trash01}
                     isDisabled={busy}
-                    onClick={() => remove(item.id)}
+                    onClick={() => setPendingRemoveId(item.id)}
                     aria-label="Remove"
                   >
                     {""}
@@ -180,6 +201,23 @@ export function PortfolioEditor({
           }}
         />
       )}
+
+      <ConfirmModal
+        isOpen={pendingRemoveId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveId(null);
+        }}
+        title="Remove this video?"
+        description={
+          pendingItem
+            ? `"${pendingItem.title}" will be removed from your portfolio.`
+            : "This video will be removed from your portfolio."
+        }
+        confirmLabel="Remove"
+        variant="danger"
+        isConfirming={removing}
+        onConfirm={confirmRemove}
+      />
     </div>
   );
 }
@@ -192,9 +230,11 @@ function AddVideoForm({
   onCreated: (item: PortfolioItem) => void;
 }) {
   const [url, setUrl] = useState("");
+  const [urlError, setUrlError] = useState<string | null>(null);
   const [preview, setPreview] = useState<EmbedPreview | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<PortfolioFieldErrors>({});
   const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
@@ -202,13 +242,20 @@ function AddVideoForm({
   async function fetchPreview() {
     if (!url) return;
     setPreviewing(true);
+    setUrlError(null);
     try {
       await fetchCsrf();
       const result = await embedApi.preview(url);
       setPreview(result);
       setTitle(result.video_title || "");
     } catch (err) {
-      toast({ title: "Couldn't fetch preview", description: extractError(err), variant: "error" });
+      // The only input here is the URL — any 400 (unsupported host, malformed URL,
+      // can't reach the page) belongs under the URL field.
+      if (err instanceof ApiError && err.status === 400) {
+        setUrlError(extractError(err));
+      } else {
+        toast({ title: "Couldn't fetch preview", description: extractError(err), variant: "error" });
+      }
     } finally {
       setPreviewing(false);
     }
@@ -217,6 +264,7 @@ function AddVideoForm({
   async function save() {
     if (!preview) return;
     setSaving(true);
+    setFieldErrors({});
     try {
       await fetchCsrf();
       const created = await portfolioApi.create({
@@ -227,7 +275,15 @@ function AddVideoForm({
       });
       onCreated(created);
     } catch (err) {
-      toast({ title: "Couldn't save video", description: extractError(err), variant: "error" });
+      const parsed = parseFieldErrors(err, PORTFOLIO_FIELDS);
+      if (parsed && Object.keys(parsed.fields).length > 0) {
+        setFieldErrors(parsed.fields);
+        if (parsed.stray) {
+          toast({ title: "Couldn't save video", description: parsed.stray, variant: "error" });
+        }
+      } else {
+        toast({ title: "Couldn't save video", description: extractError(err), variant: "error" });
+      }
     } finally {
       setSaving(false);
     }
@@ -248,9 +304,11 @@ function AddVideoForm({
         onChange={(v) => {
           setUrl(v);
           setPreview(null);
+          if (urlError) setUrlError(null);
         }}
         placeholder="https://www.tiktok.com/@you/video/..."
-        hint="TikTok, YouTube, or Instagram link."
+        isInvalid={!!urlError}
+        hint={urlError ?? "TikTok, YouTube, or Instagram link."}
       />
 
       {preview && (
@@ -272,18 +330,33 @@ function AddVideoForm({
           <Input
             label="Title"
             value={title}
-            onChange={setTitle}
+            onChange={(v) => {
+              setTitle(v);
+              if (fieldErrors.title) setFieldErrors((p) => ({ ...p, title: undefined }));
+            }}
             placeholder="Override the auto-detected title"
+            isInvalid={!!fieldErrors.title}
+            hint={fieldErrors.title}
           />
           <div className="flex flex-col gap-1.5">
             <Label>Description (optional)</Label>
             <textarea
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => {
+                setDescription(e.target.value);
+                if (fieldErrors.description) setFieldErrors((p) => ({ ...p, description: undefined }));
+              }}
               rows={2}
               placeholder="A note for brands."
-              className="w-full rounded-lg bg-primary px-3 py-2 text-md shadow-xs ring-1 ring-primary ring-inset focus:ring-2 focus:ring-brand"
+              className={
+                fieldErrors.description
+                  ? "w-full rounded-lg bg-primary px-3 py-2 text-md shadow-xs ring-1 ring-error_subtle ring-inset focus:ring-2 focus:ring-error"
+                  : "w-full rounded-lg bg-primary px-3 py-2 text-md shadow-xs ring-1 ring-primary ring-inset focus:ring-2 focus:ring-brand"
+              }
             />
+            {fieldErrors.description && (
+              <p className="text-xs text-error-primary">{fieldErrors.description}</p>
+            )}
           </div>
         </>
       )}
@@ -317,17 +390,27 @@ function EditItemForm({
 }) {
   const [title, setTitle] = useState(item.title);
   const [description, setDescription] = useState(item.description);
+  const [fieldErrors, setFieldErrors] = useState<PortfolioFieldErrors>({});
   const [busy, setBusy] = useState(false);
   const { toast } = useToast();
 
   async function save() {
     setBusy(true);
+    setFieldErrors({});
     try {
       await fetchCsrf();
       const updated = await portfolioApi.update(item.id, { title, description });
       onSaved(updated);
     } catch (err) {
-      toast({ title: "Couldn't save video", description: extractError(err), variant: "error" });
+      const parsed = parseFieldErrors(err, PORTFOLIO_FIELDS);
+      if (parsed && Object.keys(parsed.fields).length > 0) {
+        setFieldErrors(parsed.fields);
+        if (parsed.stray) {
+          toast({ title: "Couldn't save video", description: parsed.stray, variant: "error" });
+        }
+      } else {
+        toast({ title: "Couldn't save video", description: extractError(err), variant: "error" });
+      }
     } finally {
       setBusy(false);
     }
@@ -350,15 +433,34 @@ function EditItemForm({
           <span className="truncate text-xs text-tertiary">{item.original_url}</span>
         </div>
       </div>
-      <Input label="Title" value={title} onChange={setTitle} />
+      <Input
+        label="Title"
+        value={title}
+        onChange={(v) => {
+          setTitle(v);
+          if (fieldErrors.title) setFieldErrors((p) => ({ ...p, title: undefined }));
+        }}
+        isInvalid={!!fieldErrors.title}
+        hint={fieldErrors.title}
+      />
       <div className="flex flex-col gap-1.5">
         <Label>Description</Label>
         <textarea
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={(e) => {
+            setDescription(e.target.value);
+            if (fieldErrors.description) setFieldErrors((p) => ({ ...p, description: undefined }));
+          }}
           rows={2}
-          className="w-full rounded-lg bg-primary px-3 py-2 text-md shadow-xs ring-1 ring-primary ring-inset focus:ring-2 focus:ring-brand"
+          className={
+            fieldErrors.description
+              ? "w-full rounded-lg bg-primary px-3 py-2 text-md shadow-xs ring-1 ring-error_subtle ring-inset focus:ring-2 focus:ring-error"
+              : "w-full rounded-lg bg-primary px-3 py-2 text-md shadow-xs ring-1 ring-primary ring-inset focus:ring-2 focus:ring-brand"
+          }
         />
+        {fieldErrors.description && (
+          <p className="text-xs text-error-primary">{fieldErrors.description}</p>
+        )}
       </div>
       <div className="flex justify-end gap-2">
         <Button type="button" color="tertiary" size="sm" onClick={onCancel}>

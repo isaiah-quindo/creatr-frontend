@@ -3,17 +3,29 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Plus, Trash01 } from "@untitledui/icons";
 import { Button } from "@/components/base/buttons/button";
+import { ConfirmModal } from "@/components/base/confirm-modal/confirm-modal";
 import { Input } from "@/components/base/input/input";
 import { Select } from "@/components/base/select/select";
 import { useToast } from "@/components/base/toast/toast";
 import {
   ApiError,
   fetchCsrf,
+  parseFieldErrors,
   socials as socialsApi,
   type SocialAccount,
   type SocialAccountInput,
   type SocialPlatform,
 } from "@/lib/api";
+
+const SOCIAL_FIELDS = [
+  "platform",
+  "handle",
+  "profile_url",
+  "followers",
+  "avg_views",
+  "engagement_rate",
+] as const;
+type SocialFieldErrors = Partial<Record<(typeof SOCIAL_FIELDS)[number], string>>;
 
 const PLATFORMS: Array<{ value: SocialPlatform; label: string }> = [
   { value: "tiktok", label: "TikTok" },
@@ -54,8 +66,16 @@ export function SocialsEditor({
   const [items, setItems] = useState<SocialAccount[] | null>(null);
   const [editingId, setEditingId] = useState<number | "new" | null>(null);
   const [draft, setDraft] = useState<SocialAccountInput>(EMPTY);
+  const [fieldErrors, setFieldErrors] = useState<SocialFieldErrors>({});
   const [busy, setBusy] = useState(false);
+  const [pendingRemoveId, setPendingRemoveId] = useState<number | null>(null);
+  const [removing, setRemoving] = useState(false);
   const { toast } = useToast();
+
+  const pendingItem =
+    pendingRemoveId !== null
+      ? (items ?? []).find((s) => s.id === pendingRemoveId) ?? null
+      : null;
 
   useEffect(() => {
     socialsApi
@@ -71,6 +91,7 @@ export function SocialsEditor({
   function startAdd() {
     setEditingId("new");
     setDraft(EMPTY);
+    setFieldErrors({});
   }
 
   function startEdit(item: SocialAccount) {
@@ -83,10 +104,24 @@ export function SocialsEditor({
       avg_views: item.avg_views,
       engagement_rate: item.engagement_rate,
     });
+    setFieldErrors({});
   }
 
   function cancel() {
     setEditingId(null);
+    setFieldErrors({});
+  }
+
+  function updateDraft(patch: Partial<SocialAccountInput>) {
+    setDraft({ ...draft, ...patch });
+    if (Object.keys(fieldErrors).length === 0) return;
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(patch) as Array<keyof SocialAccountInput>) {
+        if (k in next) delete next[k as keyof SocialFieldErrors];
+      }
+      return next;
+    });
   }
 
   async function save() {
@@ -97,6 +132,7 @@ export function SocialsEditor({
       profile_url: buildProfileUrl(draft.platform, draft.handle),
     };
     setBusy(true);
+    setFieldErrors({});
     try {
       await fetchCsrf();
       if (editingId === "new") {
@@ -110,24 +146,42 @@ export function SocialsEditor({
       }
       setEditingId(null);
     } catch (err) {
-      toast({ title: "Couldn't save social", description: extractError(err), variant: "error" });
+      const parsed = parseFieldErrors(err, SOCIAL_FIELDS);
+      if (parsed && Object.keys(parsed.fields).length > 0) {
+        // The handle and profile_url are one user-facing field — the user types a
+        // handle and we build the URL. Collapse profile_url errors onto handle so
+        // typing into the handle input clears the error.
+        const merged = { ...parsed.fields };
+        if (merged.profile_url && !merged.handle) {
+          merged.handle = merged.profile_url;
+        }
+        delete merged.profile_url;
+        setFieldErrors(merged);
+        if (parsed.stray) {
+          toast({ title: "Couldn't save social", description: parsed.stray, variant: "error" });
+        }
+      } else {
+        toast({ title: "Couldn't save social", description: extractError(err), variant: "error" });
+      }
     } finally {
       setBusy(false);
     }
   }
 
-  async function remove(id: number) {
-    if (!confirm("Remove this social account?")) return;
-    setBusy(true);
+  async function confirmRemove() {
+    if (pendingRemoveId === null) return;
+    const id = pendingRemoveId;
+    setRemoving(true);
     try {
       await fetchCsrf();
       await socialsApi.remove(id);
       setItems((prev) => (prev ?? []).filter((s) => s.id !== id));
       if (editingId === id) setEditingId(null);
+      setPendingRemoveId(null);
     } catch (err) {
       toast({ title: "Couldn't remove social", description: extractError(err), variant: "error" });
     } finally {
-      setBusy(false);
+      setRemoving(false);
     }
   }
 
@@ -174,7 +228,8 @@ export function SocialsEditor({
               <li key={item.id}>
                 <SocialForm
                   draft={draft}
-                  setDraft={setDraft}
+                  updateDraft={updateDraft}
+                  errors={fieldErrors}
                   onSave={save}
                   onCancel={cancel}
                   busy={busy}
@@ -226,7 +281,7 @@ export function SocialsEditor({
                     size="sm"
                     iconLeading={Trash01}
                     isDisabled={busy}
-                    onClick={() => remove(item.id)}
+                    onClick={() => setPendingRemoveId(item.id)}
                     aria-label="Remove"
                   >
                     {""}
@@ -241,29 +296,50 @@ export function SocialsEditor({
       {editingId === "new" && (
         <SocialForm
           draft={draft}
-          setDraft={setDraft}
+          updateDraft={updateDraft}
+          errors={fieldErrors}
           onSave={save}
           onCancel={cancel}
           busy={busy}
         />
       )}
+
+      <ConfirmModal
+        isOpen={pendingRemoveId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveId(null);
+        }}
+        title="Remove this social account?"
+        description={
+          pendingItem
+            ? `${labelOf(pendingItem.platform)} · @${pendingItem.handle} will be removed from your profile.`
+            : "This account will be removed from your profile."
+        }
+        confirmLabel="Remove"
+        variant="danger"
+        isConfirming={removing}
+        onConfirm={confirmRemove}
+      />
     </div>
   );
 }
 
 function SocialForm({
   draft,
-  setDraft,
+  updateDraft,
+  errors,
   onSave,
   onCancel,
   busy,
 }: {
   draft: SocialAccountInput;
-  setDraft: (next: SocialAccountInput) => void;
+  updateDraft: (patch: Partial<SocialAccountInput>) => void;
+  errors: SocialFieldErrors;
   onSave: () => void;
   onCancel: () => void;
   busy: boolean;
 }) {
+  const handleError = errors.handle;
   return (
     <form
       onSubmit={(e) => {
@@ -272,44 +348,50 @@ function SocialForm({
       }}
       className="flex flex-col gap-3 rounded-xl border border-secondary bg-secondary/30 p-4"
     >
-      <div className="grid grid-cols-2 gap-3">
-        <Select<SocialPlatform>
-          label="Platform"
-          items={PLATFORMS}
-          value={draft.platform}
-          onChange={(v) => setDraft({ ...draft, platform: v })}
-        />
-        <Input
-          label="Handle"
-          value={draft.handle}
-          onChange={(v) => setDraft({ ...draft, handle: v.replace(/^@/, "") })}
-          placeholder="yourhandle"
-          hint={
-            draft.handle
+      <Select<SocialPlatform>
+        label="Platform"
+        items={PLATFORMS}
+        value={draft.platform}
+        onChange={(v) => updateDraft({ platform: v })}
+      />
+      <Input
+        label="Handle"
+        value={draft.handle}
+        onChange={(v) => updateDraft({ handle: v.replace(/^@/, "") })}
+        placeholder="yourhandle"
+        isInvalid={!!handleError}
+        hint={
+          handleError
+            ? handleError
+            : draft.handle
               ? `Public URL: ${buildProfileUrl(draft.platform, draft.handle)}`
               : "We'll build the profile URL from this."
-          }
-        />
-      </div>
+        }
+      />
       <div className="grid grid-cols-3 gap-3">
         <Input
           label="Followers"
           type="number"
           value={String(draft.followers ?? 0)}
-          onChange={(v) => setDraft({ ...draft, followers: clamp(parseInt(v) || 0) })}
+          onChange={(v) => updateDraft({ followers: clamp(parseInt(v) || 0) })}
+          isInvalid={!!errors.followers}
+          hint={errors.followers}
         />
         <Input
           label="Avg views"
           type="number"
           value={String(draft.avg_views ?? 0)}
-          onChange={(v) => setDraft({ ...draft, avg_views: clamp(parseInt(v) || 0) })}
+          onChange={(v) => updateDraft({ avg_views: clamp(parseInt(v) || 0) })}
+          isInvalid={!!errors.avg_views}
+          hint={errors.avg_views}
         />
         <Input
           label="Engagement %"
           type="number"
           value={String(draft.engagement_rate ?? "0")}
-          onChange={(v) => setDraft({ ...draft, engagement_rate: v })}
-          hint="0–100"
+          onChange={(v) => updateDraft({ engagement_rate: v })}
+          isInvalid={!!errors.engagement_rate}
+          hint={errors.engagement_rate ?? "0–100"}
         />
       </div>
       <div className="flex justify-end gap-2">

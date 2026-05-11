@@ -3,17 +3,21 @@
 import { useEffect, useState } from "react";
 import { Plus, Trash01 } from "@untitledui/icons";
 import { Button } from "@/components/base/buttons/button";
+import { ConfirmModal } from "@/components/base/confirm-modal/confirm-modal";
 import { Input } from "@/components/base/input/input";
 import { useToast } from "@/components/base/toast/toast";
 import {
   ApiError,
   fetchCsrf,
   links as linksApi,
+  parseFieldErrors,
   type CustomLink,
   type CustomLinkInput,
 } from "@/lib/api";
 
 const EMPTY: CustomLinkInput = { title: "", url: "", icon: "" };
+const LINK_FIELDS = ["title", "url", "icon", "sort_order"] as const;
+type LinkFieldErrors = Partial<Record<(typeof LINK_FIELDS)[number], string>>;
 
 export function LinksEditor({
   onItemsChange,
@@ -23,8 +27,16 @@ export function LinksEditor({
   const [items, setItems] = useState<CustomLink[] | null>(null);
   const [editingId, setEditingId] = useState<number | "new" | null>(null);
   const [draft, setDraft] = useState<CustomLinkInput>(EMPTY);
+  const [fieldErrors, setFieldErrors] = useState<LinkFieldErrors>({});
   const [busy, setBusy] = useState(false);
+  const [pendingRemoveId, setPendingRemoveId] = useState<number | null>(null);
+  const [removing, setRemoving] = useState(false);
   const { toast } = useToast();
+
+  const pendingItem =
+    pendingRemoveId !== null
+      ? (items ?? []).find((s) => s.id === pendingRemoveId) ?? null
+      : null;
 
   useEffect(() => {
     linksApi
@@ -40,20 +52,36 @@ export function LinksEditor({
   function startAdd() {
     setEditingId("new");
     setDraft(EMPTY);
+    setFieldErrors({});
   }
 
   function startEdit(item: CustomLink) {
     setEditingId(item.id);
     setDraft({ title: item.title, url: item.url, icon: item.icon });
+    setFieldErrors({});
   }
 
   function cancel() {
     setEditingId(null);
+    setFieldErrors({});
+  }
+
+  function updateDraft(patch: Partial<CustomLinkInput>) {
+    setDraft({ ...draft, ...patch });
+    if (Object.keys(fieldErrors).length === 0) return;
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(patch) as Array<keyof CustomLinkInput>) {
+        if (k in next) delete next[k as keyof LinkFieldErrors];
+      }
+      return next;
+    });
   }
 
   async function save() {
     if (!editingId) return;
     setBusy(true);
+    setFieldErrors({});
     try {
       await fetchCsrf();
       if (editingId === "new") {
@@ -67,24 +95,34 @@ export function LinksEditor({
       }
       setEditingId(null);
     } catch (err) {
-      toast({ title: "Couldn't save link", description: extractError(err), variant: "error" });
+      const parsed = parseFieldErrors(err, LINK_FIELDS);
+      if (parsed && Object.keys(parsed.fields).length > 0) {
+        setFieldErrors(parsed.fields);
+        if (parsed.stray) {
+          toast({ title: "Couldn't save link", description: parsed.stray, variant: "error" });
+        }
+      } else {
+        toast({ title: "Couldn't save link", description: extractError(err), variant: "error" });
+      }
     } finally {
       setBusy(false);
     }
   }
 
-  async function remove(id: number) {
-    if (!confirm("Remove this link?")) return;
-    setBusy(true);
+  async function confirmRemove() {
+    if (pendingRemoveId === null) return;
+    const id = pendingRemoveId;
+    setRemoving(true);
     try {
       await fetchCsrf();
       await linksApi.remove(id);
       setItems((prev) => (prev ?? []).filter((s) => s.id !== id));
       if (editingId === id) setEditingId(null);
+      setPendingRemoveId(null);
     } catch (err) {
       toast({ title: "Couldn't remove link", description: extractError(err), variant: "error" });
     } finally {
-      setBusy(false);
+      setRemoving(false);
     }
   }
 
@@ -109,7 +147,8 @@ export function LinksEditor({
               <li key={item.id}>
                 <LinkForm
                   draft={draft}
-                  setDraft={setDraft}
+                  updateDraft={updateDraft}
+                  errors={fieldErrors}
                   onSave={save}
                   onCancel={cancel}
                   busy={busy}
@@ -132,7 +171,8 @@ export function LinksEditor({
                     color="tertiary"
                     size="sm"
                     iconLeading={Trash01}
-                    onClick={() => remove(item.id)}
+                    onClick={() => setPendingRemoveId(item.id)}
+                    aria-label="Remove"
                   >
                     {""}
                   </Button>
@@ -146,25 +186,45 @@ export function LinksEditor({
       {editingId === "new" && (
         <LinkForm
           draft={draft}
-          setDraft={setDraft}
+          updateDraft={updateDraft}
+          errors={fieldErrors}
           onSave={save}
           onCancel={cancel}
           busy={busy}
         />
       )}
+
+      <ConfirmModal
+        isOpen={pendingRemoveId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveId(null);
+        }}
+        title="Remove this link?"
+        description={
+          pendingItem
+            ? `"${pendingItem.title}" will be removed from your profile.`
+            : "This link will be removed from your profile."
+        }
+        confirmLabel="Remove"
+        variant="danger"
+        isConfirming={removing}
+        onConfirm={confirmRemove}
+      />
     </div>
   );
 }
 
 function LinkForm({
   draft,
-  setDraft,
+  updateDraft,
+  errors,
   onSave,
   onCancel,
   busy,
 }: {
   draft: CustomLinkInput;
-  setDraft: (next: CustomLinkInput) => void;
+  updateDraft: (patch: Partial<CustomLinkInput>) => void;
+  errors: LinkFieldErrors;
   onSave: () => void;
   onCancel: () => void;
   busy: boolean;
@@ -180,14 +240,18 @@ function LinkForm({
       <Input
         label="Title"
         value={draft.title}
-        onChange={(v) => setDraft({ ...draft, title: v })}
+        onChange={(v) => updateDraft({ title: v })}
         placeholder="My website"
+        isInvalid={!!errors.title}
+        hint={errors.title}
       />
       <Input
         label="URL"
         value={draft.url}
-        onChange={(v) => setDraft({ ...draft, url: v })}
+        onChange={(v) => updateDraft({ url: v })}
         placeholder="https://yourlink.com"
+        isInvalid={!!errors.url}
+        hint={errors.url}
       />
       <div className="flex justify-end gap-2">
         <Button type="button" color="tertiary" size="sm" onClick={onCancel}>

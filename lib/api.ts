@@ -30,6 +30,41 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Pull a 400 DRF-style validation error into per-field messages. Returns null when
+ * the error is not a field-validation 400 (network failure, 500, etc.) so callers
+ * know to fall back to a toast. `stray` collects messages whose key isn't one of
+ * `knownFields` (e.g. `non_field_errors`) so they can still be surfaced — typically
+ * via toast when no field-level error is also present.
+ */
+export function parseFieldErrors<K extends string>(
+  err: unknown,
+  knownFields: readonly K[],
+): { fields: Partial<Record<K, string>>; stray: string | null } | null {
+  if (!(err instanceof ApiError) || err.status !== 400) return null;
+  if (typeof err.data !== "object" || err.data === null) return null;
+  const data = err.data as Record<string, unknown>;
+  const fields: Partial<Record<K, string>> = {};
+  const stray: string[] = [];
+  const known = new Set<string>(knownFields);
+  for (const [k, v] of Object.entries(data)) {
+    const msg = flattenMessage(v);
+    if (!msg) continue;
+    if (known.has(k)) {
+      fields[k as K] = msg;
+    } else {
+      stray.push(msg);
+    }
+  }
+  return { fields, stray: stray.length ? stray.join(" ") : null };
+}
+
+function flattenMessage(v: unknown): string {
+  if (Array.isArray(v)) return v.map((x) => flattenMessage(x)).filter(Boolean).join(" ");
+  if (v == null) return "";
+  return String(v);
+}
+
 function getCookie(name: string): string | undefined {
   if (typeof document === "undefined") return undefined;
   const match = document.cookie.match(
